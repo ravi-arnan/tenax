@@ -104,7 +104,7 @@ func (a *Agent) pollSysinfo(ctx context.Context) {
 func (a *Agent) pollLogs(ctx context.Context) {
 	defer a.wg.Done()
 
-	entries, err := a.logReader.Start(nil)
+	entries, err := a.logReader.Start(ctx, nil)
 	if err != nil {
 		return
 	}
