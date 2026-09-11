@@ -1,0 +1,8 @@
+/tenaxd
+/tenaxctl
+*.test
+*.cov
+.cover/
+.idea/
+.vscode/
+*.swp
