@@ -1,0 +1,25 @@
+# Example probe configuration for tenax.
+# Copy to /etc/tenax/probes.yaml (or ./probes.yaml) and edit.
+#
+# Types: http, port, exec
+# Defaults: interval 30s, timeout 5s, retries 0
+
+probes:
+  # HTTP health endpoint (any 2xx/3xx is healthy)
+  - name: web
+    type: http
+    target: http://127.0.0.1:8080/health
+    interval: 10s
+    timeout: 3s
+    retries: 2
+
+  # TCP port check
+  - name: ssh
+    type: port
+    target: 127.0.0.1:22
+
+  # Command check (exit 0 = healthy)
+  - name: disk-space
+    type: exec
+    target: test $(df --output=pcent / | tail -1 | tr -dc '0-9') -lt 90
+    interval: 1m

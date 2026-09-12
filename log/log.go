@@ -1,25 +1,24 @@
 package log
 
 import (
-	"bufio"
 	"context"
-	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-)
 
+	"github.com/coreos/go-systemd/v22/sdjournal"
+) // Entry is a single journald log line.
 type Entry struct {
-	Timestamp time.Time
-	Unit      string
-	Message   string
-	Priority  int
-	PID       int
-	Source    string
+	Timestamp time.Time `json:"ts"`
+	Unit      string    `json:"unit"`
+	Message   string    `json:"message"`
+	Priority  int       `json:"priority"` // 0-7 syslog
+	PID       int       `json:"pid,omitempty"`
+	Source    string    `json:"source,omitempty"` // journal transport: kernel, stdout, journal, audit
 }
 
+// RingBuffer is a fixed-size circular buffer of entries.
 type RingBuffer struct {
 	mu      sync.RWMutex
 	entries []Entry
@@ -68,136 +67,150 @@ func (r *RingBuffer) Len() int {
 	return r.pos
 }
 
+// JournalReader tails the systemd journal through the native sd-journal
+// API (via cgo) and feeds parsed entries to consumers. Entries are also
+// kept in an internal ring buffer.
 type JournalReader struct {
-	buf *RingBuffer
-	cmd *exec.Cmd
-	mu  sync.Mutex
+	buf   *RingBuffer
+	mu    sync.Mutex
+	open  func() (*sdjournal.Journal, error)
+	units []string
 }
 
+// NewJournalReader creates a reader with an internal ring buffer of the
+// given capacity.
 func NewJournalReader(capacity int) *JournalReader {
 	return &JournalReader{
-		buf: NewRingBuffer(capacity),
+		buf:  NewRingBuffer(capacity),
+		open: sdjournal.NewJournal,
 	}
 }
 
+// Start opens the journal, seeks to the tail (only new entries are
+// streamed, matching `journalctl -f` behavior), and returns a channel of
+// entries. The channel closes when ctx is canceled.
 func (j *JournalReader) Start(ctx context.Context, units []string) (<-chan Entry, error) {
-	ch := make(chan Entry, 100)
-
-	args := []string{"-f", "-o", "short-iso-precise", "--no-hostname"}
-	for _, u := range units {
-		args = append(args, "-u", u)
-	}
-
-	cmd := exec.CommandContext(ctx, "journalctl", args...)
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		close(ch)
-		return ch, fmt.Errorf("journalctl pipe: %w", err)
-	}
-
 	j.mu.Lock()
-	j.cmd = cmd
+	j.units = units
 	j.mu.Unlock()
 
-	if err := cmd.Start(); err != nil {
-		close(ch)
-		return ch, fmt.Errorf("journalctl start: %w", err)
+	jrn, err := j.open()
+	if err != nil {
+		return nil, err
 	}
+
+	for _, u := range units {
+		if err := jrn.AddMatch("_SYSTEMD_UNIT=" + u); err != nil {
+			jrn.Close()
+			return nil, err
+		}
+	}
+
+	// Cap field size so huge log lines don't blow up memory.
+	jrn.SetDataThreshold(256 * 1024)
+
+	// Start at the tail: stream only entries that arrive from now on.
+	if err := jrn.SeekTail(); err != nil {
+		jrn.Close()
+		return nil, err
+	}
+
+	ch := make(chan Entry, 100)
 
 	go func() {
 		defer close(ch)
+		defer jrn.Close()
 
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 64*1024), 256*1024)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 
-		for scanner.Scan() {
-			line := scanner.Text()
-			entry := parseJournalLine(line)
-			if entry != nil {
-				j.buf.Push(*entry)
+			// Wake on new entries; timeout keeps the loop responsive
+			// to ctx cancellation.
+			jrn.Wait(time.Second)
+
+			for {
+				n, err := jrn.Next()
+				if err != nil {
+					return
+				}
+				if n == 0 {
+					break // caught up; go back to Wait
+				}
+
+				je, err := jrn.GetEntry()
+				if err != nil {
+					continue
+				}
+
+				entry := entryToLogEntry(je)
+				j.buf.Push(entry)
+
 				select {
-				case ch <- *entry:
-				default:
+				case ch <- entry:
+				default: // drop if consumer is slow; ring buffer keeps it
 				}
 			}
 		}
-
-		j.mu.Lock()
-		j.cmd = nil
-		j.mu.Unlock()
-
-		cmd.Wait()
 	}()
 
 	return ch, nil
 }
 
-func (j *JournalReader) Stop() {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if j.cmd != nil && j.cmd.Process != nil {
-		j.cmd.Process.Kill()
-	}
-}
-
+// Entries returns the buffered entries.
 func (j *JournalReader) Entries() []Entry {
 	return j.buf.Entries()
 }
 
-func parseJournalLine(line string) *Entry {
-	idx := strings.Index(line, " ")
-	if idx < 20 {
-		return nil
+// entryToLogEntry maps a raw journal entry to our log Entry. Exposed for
+// tests via a plain function on exported types.
+func entryToLogEntry(je *sdjournal.JournalEntry) Entry {
+	ts := time.UnixMicro(int64(je.RealtimeTimestamp))
+
+	unit := je.Fields["_SYSTEMD_UNIT"]
+	if unit == "" {
+		unit = je.Fields["SYSLOG_IDENTIFIER"]
+	}
+	if unit == "" {
+		unit = je.Fields["_TRANSPORT"]
 	}
 
-	ts := line[:idx]
-	rest := line[idx+1:]
-
-	ts = strings.TrimRight(ts, ",")
-
-	t, err := time.Parse("2006-01-02T15:04:05.999999", ts)
-	if err != nil {
-		t = time.Now()
+	priority := 6
+	if p, err := strconv.Atoi(je.Fields["PRIORITY"]); err == nil && p >= 0 && p <= 7 {
+		priority = p
 	}
-
-	hostIdx := strings.Index(rest, " ")
-	if hostIdx < 0 {
-		return nil
-	}
-	rest = rest[hostIdx+1:]
-
-	pidEnd := strings.Index(rest, "]:")
-	if pidEnd < 0 {
-		pidEnd = strings.Index(rest, ":")
-		if pidEnd < 0 {
-			return nil
-		}
-	}
-
-	prefix := rest[:pidEnd]
-	msg := strings.TrimSpace(rest[pidEnd+2:])
 
 	pid := 0
-	unit := "unknown"
-
-	if pi := strings.LastIndex(prefix, "["); pi >= 0 {
-		pidStr := prefix[pi+1:]
-		pidStr = strings.TrimRight(pidStr, "]")
-		if p, err := strconv.Atoi(pidStr); err == nil {
+	if s := je.Fields["_PID"]; s != "" {
+		if p, err := strconv.Atoi(s); err == nil {
 			pid = p
 		}
-		unit = strings.TrimSpace(prefix[:pi])
-	} else {
-		unit = strings.TrimSpace(prefix)
+	} else if s := je.Fields["SYSLOG_PID"]; s != "" {
+		if p, err := strconv.Atoi(s); err == nil {
+			pid = p
+		}
 	}
 
-	return &Entry{
-		Timestamp: t,
+	source := je.Fields["_TRANSPORT"]
+	if source == "" {
+		source = "journal"
+	}
+
+	// Strip field prefixes if GetEntry returned raw "K=v" strings.
+	msg := je.Fields["MESSAGE"]
+	if i := strings.Index(msg, "MESSAGE="); i == 0 {
+		msg = strings.TrimPrefix(msg, "MESSAGE=")
+	}
+
+	return Entry{
+		Timestamp: ts,
 		Unit:      unit,
 		Message:   msg,
-		Priority:  6,
+		Priority:  priority,
 		PID:       pid,
-		Source:    "systemd",
+		Source:    source,
 	}
 }

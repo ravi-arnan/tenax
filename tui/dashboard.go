@@ -9,8 +9,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/ravi-arnan/tenax/agent"
+	"github.com/ravi-arnan/tenax/history"
 	"github.com/ravi-arnan/tenax/log"
 	"github.com/ravi-arnan/tenax/pkg/unit"
+	"github.com/ravi-arnan/tenax/probe"
 	"github.com/ravi-arnan/tenax/sysinfo"
 )
 
@@ -41,6 +43,11 @@ var (
 			Foreground(lipgloss.Color("244")).
 			Render
 
+	degradedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("208")).
+			Bold(true).
+			Render
+
 	labelStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("248")).
 			Render
@@ -56,21 +63,34 @@ var (
 
 type tickMsg time.Time
 
+type mode string
+
+const (
+	modeDashboard mode = "dashboard"
+	modeLogs      mode = "logs"
+)
+
 type Dashboard struct {
 	agt      *agent.Agent
 	units    []unit.Unit
 	sysSnap  sysinfo.Snapshot
 	logLines []log.Entry
+	probes   []probe.ProbeStatus
+	samples  []history.Sample
 	ready    bool
 
-	unitViewport viewport.Model
-	logViewport  viewport.Model
-	width        int
-	height       int
+	mode mode
+	logs logScreen
+
+	unitViewport  viewport.Model
+	probeViewport viewport.Model
+	logViewport   viewport.Model
+	width         int
+	height        int
 }
 
 func NewDashboard(agt *agent.Agent) *Dashboard {
-	return &Dashboard{agt: agt}
+	return &Dashboard{agt: agt, mode: modeDashboard}
 }
 
 func (d *Dashboard) Init() tea.Cmd {
@@ -93,28 +113,60 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d.ready = true
 
 		headerH := 2
-		unitH := (d.height - headerH) * 3 / 5
-		logH := d.height - headerH - unitH
+		avail := d.height - headerH
+		unitH := avail * 2 / 5
+		probeH := avail / 5
+		if len(d.probes) == 0 {
+			probeH = 1
+		}
+		logH := avail - unitH - probeH
 
 		d.unitViewport = viewport.New(d.width, unitH)
+		d.probeViewport = viewport.New(d.width, probeH)
 		d.logViewport = viewport.New(d.width, logH)
 		d.unitViewport.YPosition = headerH
-		d.logViewport.YPosition = headerH + unitH
+		d.probeViewport.YPosition = headerH + unitH
+		d.logViewport.YPosition = headerH + unitH + probeH
+
+		d.logs.updateSize(d.width, d.height)
 
 	case tickMsg:
 		d.units = d.agt.Units()
 		d.sysSnap = d.agt.SystemInfo()
 		d.logLines = d.agt.LogEntries()
+		d.probes = d.agt.Probes()
+		d.samples = d.agt.ResourceSamples()
+
+		if d.mode == modeLogs {
+			d.logs.units = d.logLines
+			d.logs.refresh(d.width)
+		}
 
 		d.unitViewport.SetContent(d.renderUnits())
+		d.probeViewport.SetContent(d.renderProbes())
 		d.logViewport.SetContent(d.renderLogs())
 
 		return d, tick()
 
 	case tea.KeyMsg:
+		if d.mode == modeLogs {
+			if d.logs.handleKey(msg) {
+				d.logs.refresh(d.width)
+				return d, nil
+			}
+			d.mode = modeDashboard
+			return d, nil
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return d, tea.Quit
+		case "l":
+			d.mode = modeLogs
+			d.logs.units = d.logLines
+			d.logs.updateSize(d.width, d.height)
+			d.logs.refresh(d.width)
+			return d, nil
 		case "up", "k":
 			d.unitViewport.LineUp(1)
 		case "down", "j":
@@ -134,11 +186,22 @@ func (d *Dashboard) View() string {
 		return "loading..."
 	}
 
+	if d.mode == modeLogs {
+		var b strings.Builder
+		b.WriteString(d.renderHeader())
+		b.WriteString("\n")
+		b.WriteString(d.logs.viewport.View())
+		b.WriteString(d.logs.statusLine(d.width))
+		return b.String()
+	}
+
 	var b strings.Builder
 	b.WriteString(d.renderHeader())
 	b.WriteString("\n")
 	b.WriteString(d.unitViewport.View())
+	b.WriteString(d.probeViewport.View())
 	b.WriteString(d.logViewport.View())
+	b.WriteString(helpStyle(" l logs · j/k scroll · q quit"))
 	return b.String()
 }
 
@@ -150,7 +213,6 @@ func (d *Dashboard) renderHeader() string {
 	load1, load5, load15, _ := sysinfo.LoadAvg()
 	hostname := sysinfo.Hostname()
 	proc, _ := sysinfo.Processes()
-	kernel := sysinfo.KernelVersion()
 
 	uptime := time.Duration(0)
 	if sys.Uptime > 0 {
@@ -158,17 +220,41 @@ func (d *Dashboard) renderHeader() string {
 	}
 	uptimeStr := formatDuration(uptime)
 
-	b := d.width - 2
-	if b < 60 {
-		b = 60
-	}
+	spark := sparkline(d.samples, d.width/4)
 
-	line := fmt.Sprintf(" tenax  %s | kernel %s | cpu %s | mem %s | load %.2f %.2f %.2f | procs %d | up %s",
-		hostname, kernel, cpu, mem, load1, load5, load15, proc, uptimeStr)
+	line := fmt.Sprintf(" tenax  %s | cpu %s %s | mem %s | load %.2f %.2f %.2f | procs %d | up %s",
+		hostname, cpu, spark, mem, load1, load5, load15, proc, uptimeStr)
 	if len(line) > d.width-2 {
 		line = line[:d.width-5] + "..."
 	}
 	return headerStyle(lipgloss.PlaceHorizontal(d.width, lipgloss.Left, line))
+}
+
+// sparkline renders recent CPU samples as unicode blocks. width bounds the
+// number of points used (most recent last).
+func sparkline(samples []history.Sample, width int) string {
+	blocks := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+	if width < 3 {
+		width = 3
+	}
+	if len(samples) > width {
+		samples = samples[len(samples)-width:]
+	}
+	if len(samples) < 2 {
+		return ""
+	}
+	out := make([]rune, 0, len(samples))
+	for _, s := range samples {
+		idx := int(s.CPUPct / 100 * float64(len(blocks)-1))
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(blocks) {
+			idx = len(blocks) - 1
+		}
+		out = append(out, blocks[idx])
+	}
+	return string(out)
 }
 
 func (d *Dashboard) renderUnits() string {
@@ -186,7 +272,7 @@ func (d *Dashboard) renderUnits() string {
 		_ = active
 	}
 
-	header := fmt.Sprintf(" %s  %s total, %d failed", titleStyle("Services"), total, failed)
+	header := fmt.Sprintf(" %s  %d total, %d failed", titleStyle("Services"), total, failed)
 	b.WriteString(header)
 	b.WriteString("\n\n")
 
@@ -203,6 +289,52 @@ func (d *Dashboard) renderUnits() string {
 	}
 
 	return b.String()
+}
+
+func (d *Dashboard) renderProbes() string {
+	var b strings.Builder
+	if len(d.probes) == 0 {
+		b.WriteString(fmt.Sprintf(" %s  no probes configured", titleStyle("Probes")))
+		return b.String()
+	}
+
+	healthy := 0
+	for _, p := range d.probes {
+		if p.Status == probe.StatusHealthy {
+			healthy++
+		}
+	}
+
+	header := fmt.Sprintf(" %s  %d/%d healthy", titleStyle("Probes"), healthy, len(d.probes))
+	b.WriteString(header)
+	b.WriteString("\n\n")
+
+	for _, p := range d.probes {
+		state := d.renderProbeState(p)
+		name := p.Probe.Name
+		if len(name) > 24 {
+			name = name[:24]
+		}
+		latency := "-"
+		if !p.LastResult.Timestamp.IsZero() {
+			latency = p.LastResult.Latency.Round(time.Millisecond).String()
+		}
+		b.WriteString(fmt.Sprintf(" %s %-25s %-6s %s\n", state, name, p.Probe.Type, latency))
+	}
+	return b.String()
+}
+
+func (d *Dashboard) renderProbeState(p probe.ProbeStatus) string {
+	switch p.Status {
+	case probe.StatusHealthy:
+		return activeStyle(" ● up     ")
+	case probe.StatusDegraded:
+		return degradedStyle(" ● degrad ")
+	case probe.StatusDown:
+		return failedStyle(" ● down   ")
+	default:
+		return inactiveStyle(" ○ unknown")
+	}
 }
 
 func (d *Dashboard) renderState(u unit.Unit) string {

@@ -1,0 +1,36 @@
+# Example alert configuration for tenax.
+# Copy to /etc/tenax/alerts.yaml (or ./alerts.yaml) and edit.
+#
+# Kinds: cpu, memory, disk, unit, probe
+# `for` holds the breach duration before an alert fires (default: immediate).
+# Sinks: webhook, log (slog), stdout. If no sink is set, log is used.
+
+sinks:
+  - log: true
+  # - webhook: https://example.com/alerts
+  # - stdout: true
+
+rules:
+  - name: cpu-high
+    kind: cpu
+    threshold: 90
+    for: 5m
+
+  - name: mem-high
+    kind: memory
+    threshold: 90
+    for: 5m
+
+  - name: root-disk-full
+    kind: disk
+    mountpoint: /
+    threshold: 90
+
+  - name: nginx-down
+    kind: unit
+    unit: nginx.service
+
+  - name: web-probe-down
+    kind: probe
+    probe: web
+    for: 1m

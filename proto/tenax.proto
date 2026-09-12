@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package tenax.v1;
+
+option go_package = "github.com/ravi-arnan/tenax/proto/tenaxv1";
+
+import "google/protobuf/timestamp.proto";
+
+// AgentService is the agent-to-controller streaming protocol.
+service AgentService {
+  // Connect streams host snapshots from an agent to the controller.
+  // The agent is the client; the first snapshot acts as registration.
+  rpc Connect(stream Snapshot) returns (ConnectResponse);
+}
+
+// Snapshot is a periodic batch of host state.
+message Snapshot {
+  string agent_version = 1;
+  string hostname = 2;
+  string os = 3;      // e.g. "ubuntu 24.04"
+  string kernel = 4;
+
+  HostStatus status = 5;
+  repeated UnitState units = 6;
+  ResourceSample latest = 7;
+  repeated ProbeState probes = 8;
+  google.protobuf.Timestamp sent_at = 9;
+
+  // Tags group this host in the fleet (e.g. "prod", "web"). Set from the
+  // agent's tenax.yaml controller.tags.
+  repeated string tags = 10;
+}
+
+message HostStatus {
+  int64 uptime_seconds = 1;
+  int32 units_total = 2;
+  int32 units_active = 3;
+  int32 units_failed = 4;
+}
+
+message UnitState {
+  string name = 1;
+  string active_state = 2;
+  string sub_state = 3;
+  string load_state = 4;
+}
+
+message ResourceSample {
+  double cpu_percent = 1;
+  double mem_percent = 2;
+  double load1 = 3;
+  google.protobuf.Timestamp time = 4;
+}
+
+message ProbeState {
+  string name = 1;
+  string type = 2;
+  string status = 3;
+  int32 consecutive_failures = 4;
+}
+
+message ConnectResponse {
+  string controller_id = 1;
+  int64 report_interval_seconds = 2; // controller-preferred cadence
+}

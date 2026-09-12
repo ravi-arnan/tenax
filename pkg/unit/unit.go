@@ -8,16 +8,16 @@ import (
 )
 
 type Unit struct {
-	Name          string
-	Description   string
-	ActiveState   string
-	SubState      string
-	LoadState     string
-	PID           int
-	CPUUsage      float64
-	MemoryBytes   uint64
-	Uptime        time.Duration
-	LoadTimestamp time.Time
+	Name          string        `json:"name"`
+	Description   string        `json:"description,omitempty"`
+	ActiveState   string        `json:"active_state"`
+	SubState      string        `json:"sub_state"`
+	LoadState     string        `json:"load_state"`
+	PID           int           `json:"pid,omitempty"`
+	CPUUsage      float64       `json:"cpu_seconds,omitempty"`
+	MemoryBytes   uint64        `json:"memory_bytes,omitempty"`
+	Uptime        time.Duration `json:"-"`
+	LoadTimestamp time.Time     `json:"-"`
 }
 
 type Manager struct {

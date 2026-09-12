@@ -9,7 +9,21 @@ import (
 	"github.com/coreos/go-systemd/v22/activation"
 )
 
-func Listen() (net.Listener, error) {
+// Listen returns the listener for the tenax API. Precedence:
+//
+//  1. explicit addr (from config), e.g. "127.0.0.1:9721"
+//  2. systemd socket activation (LISTEN_FDS)
+//  3. TENAX_PORT env var
+//  4. default 127.0.0.1:9721
+func Listen(addr string) (net.Listener, error) {
+	if addr != "" {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return nil, fmt.Errorf("listen %s: %w", addr, err)
+		}
+		return ln, nil
+	}
+
 	listeners, err := activation.Listeners()
 	if err != nil {
 		return nil, fmt.Errorf("socket activation: %w", err)
@@ -30,20 +44,6 @@ func Listen() (net.Listener, error) {
 		return nil, fmt.Errorf("listen :%d: %w", port, err)
 	}
 	return ln, nil
-}
-
-func NotifyReady() error {
-	systemd, ok := os.LookupEnv("NOTIFY_SOCKET")
-	if !ok {
-		return nil
-	}
-	_ = systemd
-	return nil
-}
-
-func SdNotify(state string) error {
-	_ = state
-	return nil
 }
 
 func SocketPath() string {

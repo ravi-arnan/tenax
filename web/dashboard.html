@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Auto-refresh the dashboard every 5 seconds -->
+<meta http-equiv="refresh" content="5">
+<title>tenax — {{.Hostname}}</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --fg: #e6edf3; --muted: #8b949e;
+    --green: #3fb950; --red: #f85149; --orange: #d29922; --dim: #6e7681;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1.5rem;
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  header { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: baseline; margin-bottom: 1rem; }
+  header h1 { margin: 0; font-size: 1.1rem; color: var(--fg); }
+  header .muted { color: var(--muted); }
+  .spark { color: var(--green); letter-spacing: 1px; }
+  section {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem;
+  }
+  section h2 { margin: 0 0 0.75rem; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--muted); font-weight: normal; padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--border); }
+  td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  .dot { font-size: 0.7rem; }
+  .active { color: var(--green); }
+  .failed { color: var(--red); font-weight: bold; }
+  .other { color: var(--dim); }
+  button {
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.15rem 0.6rem; font: inherit; font-size: 0.8rem;
+    cursor: pointer; margin-left: 0.3rem;
+  }
+  button:hover { border-color: var(--muted); }
+  button.danger { color: var(--red); }
+  .desc { color: var(--muted); }
+  .muted { color: var(--muted); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  footer { color: var(--dim); font-size: 0.75rem; margin-top: 2rem; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>tenax</h1>
+  <span>{{.Hostname}}</span>
+  <span class="muted">{{.Kernel}}</span>
+  <span>cpu <strong>{{printf "%.1f" .CPU}}%</strong> <span class="spark">{{.Spark}}</span></span>
+  <span>mem <strong>{{printf "%.1f" .Mem}}%</strong></span>
+  <span class="muted">load {{printf "%.2f" .Load1}}</span>
+</header>
+
+<section>
+  <h2>Services</h2>
+  <table>
+    <tr><th></th><th>Unit</th><th>State</th><th>Description</th><th></th></tr>
+    {{$units := .Units}}
+    {{range $u := $units}}
+    <tr>
+      <td class="dot {{if $u.Active}}active{{else if $u.Failed}}failed{{else}}other{{end}}">●</td>
+      <td>{{$u.Name}}</td>
+      <td class="{{if $u.Active}}active{{else if $u.Failed}}failed{{else}}other{{end}}">{{$u.State}} / {{$u.SubState}}</td>
+      <td class="desc">{{$u.Desc}}</td>
+      <td>
+        {{if $u.CanStart}}<form method="post" action="/ui/units/{{$u.Name}}/start" style="display:inline"><button type="submit">start</button></form>{{end}}
+        {{if $u.CanStop}}<form method="post" action="/ui/units/{{$u.Name}}/stop" style="display:inline"><button class="danger" type="submit">stop</button></form>{{end}}
+        {{if $u.CanRestart}}<form method="post" action="/ui/units/{{$u.Name}}/restart" style="display:inline"><button type="submit">restart</button></form>{{end}}
+      </td>
+    </tr>
+    {{end}}
+  </table>
+</section>
+
+<div class="grid">
+  <section>
+    <h2>Probes</h2>
+    {{if .Probes}}
+    <table>
+      <tr><th></th><th>Name</th><th>Type</th><th>Status</th></tr>
+      {{range .Probes}}
+      <tr>
+        <td class="dot {{if .Up}}active{{else if .Bad}}failed{{else}}other{{end}}">●</td>
+        <td>{{.Name}}</td>
+        <td class="muted">{{.Type}}</td>
+        <td>{{.Status}}</td>
+      </tr>
+      {{end}}
+    </table>
+    {{else}}<p class="muted">No probes configured.</p>{{end}}
+  </section>
+
+  <section>
+    <h2>Recent Unit Events</h2>
+    {{if .Events}}
+    <table>
+      <tr><th>Time</th><th>Unit</th><th>Transition</th></tr>
+      {{range .Events}}
+      <tr>
+        <td class="muted">{{.Time}}</td>
+        <td>{{.Unit}}</td>
+        <td>{{.From}} → <strong>{{.To}}</strong></td>
+      </tr>
+      {{end}}
+    </table>
+    {{else}}<p class="muted">No events recorded yet.</p>{{end}}
+  </section>
+</div>
+
+<footer>tenax auto-refreshes every 5s — actions redirect back here</footer>
+
+</body>
+</html>

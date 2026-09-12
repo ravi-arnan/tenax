@@ -1,0 +1,24 @@
+# Example tenax daemon configuration.
+# Copy to /etc/tenax/tenax.yaml (or ~/.config/tenax/tenax.yaml) and edit.
+# Every field is optional — defaults shown below.
+
+api:
+  # Address for the HTTP API to bind. Empty = socket activation if
+  # available, else TENAX_PORT, else 127.0.0.1:9721.
+  listen: ""
+
+agent:
+  units_interval_sec: 3      # systemd unit poll interval
+  sysinfo_interval_sec: 5    # resource sample interval
+  unit_history_size: 500     # max unit state transitions kept
+  resource_history_size: 720 # max resource samples kept (~1h at 5s)
+
+# Separate config files (same search paths as this file).
+probes:
+  file: ""   # e.g. /etc/tenax/probes.yaml — empty = default search
+alerts:
+  file: ""   # e.g. /etc/tenax/alerts.yaml — empty = default search
+
+# Optional: report to a tenaxc controller (multi-host).
+# controller:
+#   endpoint: ctrl.example.com:9731

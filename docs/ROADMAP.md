@@ -1,6 +1,6 @@
 # Roadmap
 
-## Phase 1: Core Agent (current)
+## Phase 1: Core Agent (done)
 
 - [x] Project scaffold + Go module
 - [x] systemd D-Bus wrapper (list, start, stop, restart units)
@@ -8,33 +8,33 @@
 - [x] Sysinfo collector skeleton
 - [x] Agent engine (poll loop, concurrent subsystems)
 - [x] Daemon entrypoint with signal handling
-- [ ] Full sysinfo implementation (gopsutil or /proc parse)
-- [ ] Real journald integration (sd-journal API)
-- [ ] TUI: service list + status + log viewer
-- [ ] TTI: `tenaxctl` CLI (cobra)
-- [ ] Probe engine — HTTP, port, exec health checks
-- [ ] Prometheus metrics endpoint
-- [ ] Alerting rules (basic: threshold + notification)
+- [x] Full sysinfo implementation (/proc parse)
+- [x] Real journald integration (sd-journal API, native cgo)
+- [x] TUI: service list + status + log viewer + probes panel
+- [x] CLI: `tenaxctl` (cobra)
+- [x] Probe engine — HTTP, port, exec health checks
+- [x] Prometheus metrics endpoint
+- [x] Alerting rules (basic: threshold + notification)
 
-## Phase 2: Single-Host Dashboard
+## Phase 2: Single-Host Dashboard (done)
 
-- [ ] REST API (chi or stdlib)
-- [ ] Web UI (HTMX or Svelte) — service dashboard
-- [ ] Config file (YAML: /etc/tenax/tenax.yaml)
-- [ ] Log filter + search in TUI
-- [ ] Systemd unit history (start/stop/restart timeline)
-- [ ] Resource graphs (CPU, memory, disk over time)
+- [x] REST API (stdlib, pattern routing) — units, logs, probes, alerts, actions
+- [x] Web UI — embedded server-rendered HTML dashboard (zero deps, auto-refresh, unit actions)
+- [x] Config file (YAML: /etc/tenax/tenax.yaml)
+- [x] Log filter + search in TUI (unit filter, severity cycling, / search, follow)
+- [x] Systemd unit history (start/stop/restart timeline) — API + tenaxctl history
+- [x] Resource graphs (CPU, memory over time) — samples API + TUI sparkline
 
-## Phase 3: Multi-Host
+## Phase 3: Multi-Host (done)
 
-- [ ] gRPC agent-to-controller protocol
-- [ ] Controller daemon (collects from multiple agents)
-- [ ] Agent registration + heartbeats
-- [ ] Unified TUI across hosts
-- [ ] Unified web UI
-- [ ] Host groups + tags
+- [x] gRPC agent-to-controller protocol (proto/tenax.proto, client-streaming snapshots)
+- [x] Controller daemon `tenaxc` (registry, gRPC :9731, HTTP :9730, fleet page)
+- [x] Agent registration + heartbeats (uplink with reconnect backoff, liveness sweep)
+- [x] Unified TUI across hosts — `tenaxc tui` fleet dashboard (group cycling)
+- [x] Fleet web UI (host list + status page + group filter)
+- [x] Host groups + tags (from agent config, filterable in API/HTML/TUI)
 
-## Phase 4: Declarative Config
+## Phase 4: Declarative Config (next)
 
 - [ ] YAML service definition (port, health check, depends_on, env)
 - [ ] Apply/diff/plan workflow

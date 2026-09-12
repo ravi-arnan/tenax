@@ -19,7 +19,65 @@ ____________________________
 
 ## Status
 
-Pre-alpha. Core agent scaffolded. Builds and runs. No useful features yet.
+Alpha. Phases 1-3 complete: single-host agent (probes, metrics, alerting,
+API, web UI, TUI) and multi-host controller with fleet dashboard.
+
+- Daemon: `/etc/tenax/tenax.yaml` — [docs/tenax.example.yaml](./docs/tenax.example.yaml)
+- Probes: `/etc/tenax/probes.yaml` — [docs/probes.example.yaml](./docs/probes.example.yaml)
+- Alerts: `/etc/tenax/alerts.yaml` — [docs/alerts.example.yaml](./docs/alerts.example.yaml)
+
+> Build requires cgo with systemd headers (e.g. `nix-shell -p go systemd.dev pkg-config`).
+
+## HTTP API
+
+The daemon serves on `127.0.0.1:9721` (override with `TENAX_PORT` or
+`api.listen` in tenax.yaml):
+
+- `GET /` — **dashboard UI** (embedded HTML, auto-refresh, unit start/stop/restart buttons)
+
+- `GET /metrics` — Prometheus metrics (units, CPU, memory, disk, probes)
+- `GET /api/status` — JSON status snapshot
+- `GET /api/units[?state=]` — tracked units
+- `GET /api/units/{name}` — single unit
+- `POST /api/units/{name}/start|stop|restart` — unit actions
+- `GET /api/logs?unit=&priority=&limit=` — recent journal entries
+- `GET /api/probes`, `GET /api/alerts` — health + rule states
+- `GET /api/history/units` — unit state transition timeline
+- `GET /api/history/resources` — CPU/memory samples over time
+- `GET /healthz` — liveness
+
+## Multi-Host
+
+Run a controller, then point agents at it:
+
+```
+tenaxc                          # gRPC :9731, HTTP UI :9730
+tenaxc tui                      # fleet terminal dashboard (tab = cycle group)
+curl localhost:9730/api/hosts   # fleet as JSON (?group=tag filters)
+open localhost:9730/            # fleet dashboard with group links
+
+# on each agent host (tenax.yaml):
+# controller:
+#   endpoint: ctrl.example.com:9731
+#   tags: [prod, web]
+```
+
+Agents reconnect with backoff and heartbeat every 10s; hosts go `stale`
+after the liveness window (default 2m).
+
+## CLI
+
+```
+tenaxctl status              # daemon summary
+tenaxctl units [--state=]    # list units
+tenaxctl start|stop|restart <unit>
+tenaxctl logs [--unit=] [--limit=]
+tenaxctl probes
+tenaxctl history            # unit events + resource samples
+tenaxctl hosts              # fleet hosts via controller
+```
+
+`TENAX_API` overrides the daemon URL.
 
 ## Quick start
 
@@ -33,11 +91,11 @@ sudo tenaxd
 ```
 tenaxd                  single daemon binary
   ├─ unitmgr            systemd unit CRUD (D-Bus)
-  ├─ log reader         journald tail + ring buffer
-  ├─ sysinfo collector  CPU, memory, disk, network
-  ├─ probe engine       health checks (HTTP, exec, port)
-  ├─ REST API           local HTTP API
-  └─ TUI                bubbletea dashboard (coming soon)
+  ├─ log reader         native sd-journal tail + ring buffer
+  ├─ sysinfo collector  CPU, memory, disk, network  ├─ probe engine       health checks (HTTP, exec, port)
+  ├─ alerting           threshold rules, webhook/log sinks
+  ├─ REST API           local HTTP API + Prometheus /metrics
+  └─ TUI                dashboard + full-screen logs (filter, / search, follow)
 ```
 
 ## Roadmap
