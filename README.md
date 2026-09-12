@@ -19,12 +19,14 @@ ____________________________
 
 ## Status
 
-Alpha. Phases 1-3 complete: single-host agent (probes, metrics, alerting,
-API, web UI, TUI) and multi-host controller with fleet dashboard.
+Alpha. Phases 1-4 complete: single-host agent (probes, metrics, alerting,
+API, web UI, TUI), multi-host controller with fleet dashboard, and
+declarative service configuration with plan/apply workflow.
 
 - Daemon: `/etc/tenax/tenax.yaml` — [docs/tenax.example.yaml](./docs/tenax.example.yaml)
 - Probes: `/etc/tenax/probes.yaml` — [docs/probes.example.yaml](./docs/probes.example.yaml)
 - Alerts: `/etc/tenax/alerts.yaml` — [docs/alerts.example.yaml](./docs/alerts.example.yaml)
+- Services: `/etc/tenax/services.yaml` — [docs/services.example.yaml](./docs/services.example.yaml)
 
 > Build requires cgo with systemd headers (e.g. `nix-shell -p go systemd.dev pkg-config`).
 
@@ -75,6 +77,11 @@ tenaxctl logs [--unit=] [--limit=]
 tenaxctl probes
 tenaxctl history            # unit events + resource samples
 tenaxctl hosts              # fleet hosts via controller
+
+# Phase 4: declarative config
+tenaxctl plan                # preview changes (dry run)
+tenaxctl apply               # apply desired state
+tenaxctl apply --dry-run     # same as plan
 ```
 
 `TENAX_API` overrides the daemon URL.
@@ -92,8 +99,10 @@ sudo tenaxd
 tenaxd                  single daemon binary
   ├─ unitmgr            systemd unit CRUD (D-Bus)
   ├─ log reader         native sd-journal tail + ring buffer
-  ├─ sysinfo collector  CPU, memory, disk, network  ├─ probe engine       health checks (HTTP, exec, port)
+  ├─ sysinfo collector  CPU, memory, disk, network
+  ├─ probe engine       health checks (HTTP, exec, port)
   ├─ alerting           threshold rules, webhook/log sinks
+  ├─ declarative cfg    services.yaml, plan/apply, secrets, templates
   ├─ REST API           local HTTP API + Prometheus /metrics
   └─ TUI                dashboard + full-screen logs (filter, / search, follow)
 ```

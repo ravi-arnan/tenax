@@ -34,12 +34,14 @@
 - [x] Fleet web UI (host list + status page + group filter)
 - [x] Host groups + tags (from agent config, filterable in API/HTML/TUI)
 
-## Phase 4: Declarative Config (next)
+## Phase 4: Declarative Config (done)
 
-- [ ] YAML service definition (port, health check, depends_on, env)
-- [ ] Apply/diff/plan workflow
-- [ ] Secret management (env file, or external store)
-- [ ] Template system (per-host variables)
+- [x] YAML service definition (port, health check, depends_on, env)
+- [x] Apply/diff/plan workflow (`tenaxctl plan`, `tenaxctl apply`)
+- [x] Secret management (env file with `$secret:KEY` references)
+- [x] Template system (per-host variables via Go text/template)
+- [x] Service dependency validation + topological sort
+- [x] Cycle detection for dependency graphs
 
 ## Phase 5: Plugin System
 

@@ -1,0 +1,79 @@
+# Example declarative service definitions for tenax.
+# Copy to /etc/tenax/services.yaml and edit.
+#
+# Each service maps to a systemd unit with health checks, dependencies,
+# environment variables, and an optional restart policy.
+#
+# Use `tenaxctl plan` to preview changes and `tenaxctl apply` to enact them.
+
+services:
+  # Web server — depends on app being healthy first.
+  nginx:
+    unit: nginx.service
+    port: 80
+    health:
+      type: http
+      target: http://127.0.0.1/health
+      interval: 10s
+      timeout: 3s
+      retries: 2
+    depends_on:
+      - app
+    env:
+      SERVER_NAME: example.com
+    secrets:
+      - TLS_CERT
+      - TLS_KEY
+    restart: always
+    # Optional: inline unit template (Go text/template syntax).
+    # Template variables come from env + secrets + host vars.
+    template: |
+      [Unit]
+      Description={{.Vars.server_name}} web server
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/sbin/nginx
+      Restart={{ default "always" .Vars.restart }}
+
+  # Application server — no dependencies (leaf service).
+  app:
+    unit: app.service
+    port: 8080
+    health:
+      type: http
+      target: http://127.0.0.1:8080/healthz
+      interval: 5s
+      timeout: 2s
+    env:
+      NODE_ENV: production
+      PORT: "8080"
+    secrets:
+      - DB_PASSWORD
+    restart: on-failure
+
+  # Background worker — depends on app.
+  worker:
+    unit: worker.service
+    health:
+      type: exec
+      target: test -f /tmp/worker.ok
+      interval: 30s
+    depends_on:
+      - app
+    env:
+      WORKER_CONCURRENCY: "4"
+    restart: always
+
+  # Database — leaf service, no health check configured yet.
+  postgres:
+    unit: postgresql.service
+    port: 5432
+    health:
+      type: port
+      target: 127.0.0.1:5432
+      interval: 15s
+    env:
+      PGDATA: /var/lib/postgresql/data
+    restart: always

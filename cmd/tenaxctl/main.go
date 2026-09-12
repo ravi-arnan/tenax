@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ravi-arnan/tenax/config"
 	"github.com/spf13/cobra"
 )
 
@@ -291,6 +292,134 @@ func main() {
 	}
 	cmd.AddCommand(probesCmd)
 
+	// --- Phase 4: declarative config commands ---
+
+	planCmd := &cobra.Command{
+		Use:   "plan",
+		Short: "Show what apply would do (dry run)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			servicesPath, _ := cmd.Flags().GetString("services")
+			secretsPath, _ := cmd.Flags().GetString("secrets")
+			varsPath, _ := cmd.Flags().GetString("vars")
+
+			sf, err := config.LoadServicesFile(servicesPath)
+			if err != nil {
+				return err
+			}
+			if err := sf.Validate(); err != nil {
+				return err
+			}
+
+			// Build desired state.
+			desired := buildDesiredState(sf)
+
+			// Build actual state from daemon API.
+			actual, err := fetchActualState()
+			if err != nil {
+				return err
+			}
+
+			diffs := config.Diff(desired, actual)
+			fmt.Print(config.FormatPlan(diffs))
+
+			// Show secrets and vars info only when non-default.
+			if secretsPath != config.DefaultSecretsPath() {
+				fmt.Printf("\nsecrets file: %s\n", secretsPath)
+			}
+			if varsPath != config.DefaultVarsPath() {
+				fmt.Printf("vars file:   %s\n", varsPath)
+			}
+
+			return nil
+		},
+	}
+	planCmd.Flags().String("services", config.DefaultServicesPath(), "path to services.yaml")
+	planCmd.Flags().String("secrets", config.DefaultSecretsPath(), "path to secrets.env")
+	planCmd.Flags().String("vars", config.DefaultVarsPath(), "path to vars.yaml")
+	cmd.AddCommand(planCmd)
+
+	applyCmd := &cobra.Command{
+		Use:   "apply",
+		Short: "Apply desired state to the local daemon",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			servicesPath, _ := cmd.Flags().GetString("services")
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+			sf, err := config.LoadServicesFile(servicesPath)
+			if err != nil {
+				return err
+			}
+			if err := sf.Validate(); err != nil {
+				return err
+			}
+
+			desired := buildDesiredState(sf)
+			actual, err := fetchActualState()
+			if err != nil {
+				return err
+			}
+
+			diffs := config.Diff(desired, actual)
+			if len(diffs) == 0 {
+				fmt.Println("nothing to do")
+				return nil
+			}
+
+			if dryRun {
+				fmt.Print(config.FormatPlan(diffs))
+				fmt.Println("\n(dry run — no changes made)")
+				return nil
+			}
+
+			// Execute actions via the daemon API.
+			applied := 0
+			for _, d := range diffs {
+				if d.Action == config.ActionNone {
+					continue
+				}
+
+				if d.Action == config.ActionCreate {
+					// Unit file doesn't exist yet — template rendering is
+					// needed before systemd can manage this unit. Show a
+					// helpful message instead of blindly trying to start.
+					fmt.Fprintf(os.Stderr, "warning: %s (%s) unit file not found — add a template or create the unit manually\n", d.Service, d.Unit)
+					continue
+				}
+
+				var action string
+				switch d.Action {
+				case config.ActionStart:
+					action = "start"
+				case config.ActionStop:
+					action = "stop"
+				case config.ActionRestart, config.ActionUpdate:
+					action = "restart"
+				}
+				if action == "" {
+					continue
+				}
+
+				_, err := apiPost("/api/units/" + d.Unit + "/" + action)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warning: %s %s: %v\n", action, d.Unit, err)
+					continue
+				}
+				fmt.Printf("%s %s (%s)\n", action, d.Service, d.Unit)
+				applied++
+			}
+
+			if applied == 0 {
+				fmt.Println("no changes applied")
+			} else {
+				fmt.Printf("\napplied %d change(s)\n", applied)
+			}
+			return nil
+		},
+	}
+	applyCmd.Flags().String("services", config.DefaultServicesPath(), "path to services.yaml")
+	applyCmd.Flags().Bool("dry-run", false, "show plan without applying")
+	cmd.AddCommand(applyCmd)
+
 	hostsCmd := &cobra.Command{
 		Use:   "hosts",
 		Short: "List hosts known to a tenaxc controller",
@@ -335,4 +464,39 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// buildDesiredState converts a ServicesFile into a DesiredState for diffing.
+func buildDesiredState(sf *config.ServicesFile) *config.DesiredState {
+	ds := &config.DesiredState{Services: make(map[string]config.DesiredService)}
+	for name, svc := range sf.Services {
+		ds.Services[name] = config.DesiredService{
+			Name:      name,
+			Unit:      svc.Unit,
+			Port:      svc.Port,
+			Health:    svc.Health,
+			Restart:   svc.Restart,
+			DependsOn: svc.DependsOn,
+			Template:  svc.Template,
+		}
+	}
+	return ds
+}
+
+// fetchActualState queries the local tenax daemon for current unit states.
+func fetchActualState() (*config.ActualState, error) {
+	var resp unitsResponse
+	if err := apiGet("/api/units", &resp); err != nil {
+		return nil, err
+	}
+	as := &config.ActualState{Units: make(map[string]config.UnitState)}
+	for _, u := range resp.Units {
+		as.Units[u.Name] = config.UnitState{
+			Name:        u.Name,
+			ActiveState: u.ActiveState,
+			SubState:    u.SubState,
+			Loaded:      u.LoadState == "loaded",
+		}
+	}
+	return as, nil
 }
